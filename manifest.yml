@@ -1,0 +1,8 @@
+---
+applications:
+- name: cf
+  memory: 64M
+  buildpack: go_buildpack
+  command: cf-concourse
+  env:
+    GOPACKAGENAME: github.com/govau/cf-concourse
