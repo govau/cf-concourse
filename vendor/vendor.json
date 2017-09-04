@@ -207,18 +207,6 @@
 			"revisionTime": "2017-09-02T11:52:07Z"
 		},
 		{
-			"checksumSHA1": "HdShhM4tp16OzAZ/AC8JBXn3fVY=",
-			"path": "github.com/govau/cf-fly",
-			"revision": "4c306656dd9fafc91fb606e2d1e0391fa9401696",
-			"revisionTime": "2017-09-02T11:49:49Z"
-		},
-		{
-			"checksumSHA1": "EJgtE2JXv/MaCbMwkLl7FuwTDKE=",
-			"path": "github.com/govau/cf-fly/server",
-			"revision": "4c306656dd9fafc91fb606e2d1e0391fa9401696",
-			"revisionTime": "2017-09-02T11:49:49Z"
-		},
-		{
 			"checksumSHA1": "cdOCt0Yb+hdErz8NAQqayxPmRsY=",
 			"origin": "github.com/hashicorp/go-multierror/vendor/github.com/hashicorp/errwrap",
 			"path": "github.com/hashicorp/errwrap",
@@ -256,7 +244,7 @@
 			"revisionTime": "2017-08-10T06:12:20Z"
 		},
 		{
-			"checksumSHA1": "Gk3jTNQ5uGDUE0WMJFWcYz9PMps=",
+			"checksumSHA1": "q5SZBWFVC3wOIzftf+l/h5WLG1k=",
 			"path": "github.com/lib/pq/oid",
 			"revision": "e42267488fe361b9dc034be7a6bffef5b195bceb",
 			"revisionTime": "2017-08-10T06:12:20Z"
