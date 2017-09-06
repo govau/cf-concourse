@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	cfclient "github.com/cloudfoundry-community/go-cfclient"
@@ -76,6 +77,7 @@ func (s *cfFlyServer) Init() error {
 		Transport: &basicAuthTransport{
 			Username: s.ConcourseUsername,
 			Password: s.ConcoursePassword,
+			TokenURL: fmt.Sprintf("%s/api/v1/teams/main/auth/token", s.ConcourseURL),
 		},
 	}
 
@@ -143,8 +145,9 @@ func (s *cfFlyServer) mintToken(accessToken, spaceID string) ([]byte, error) {
 
 	// Make sure team exists
 	if s.AutoCreateTeams {
-		teams, err := concourse.NewClient(s.ConcourseURL, http.DefaultClient, false).ListTeams()
+		teams, err := concourse.NewClient(s.ConcourseURL, http.DefaultClient, true).ListTeams()
 		if err != nil {
+			log.Println("Error in listing")
 			return nil, err
 		}
 		found := false
@@ -169,16 +172,16 @@ func (s *cfFlyServer) mintToken(accessToken, spaceID string) ([]byte, error) {
 			}
 
 			jrm := json.RawMessage(confBytes)
-
-			concourse.NewClient(s.ConcourseURL, s.concourseAuthenticatedClient, false).Team(storeName).CreateOrUpdate(atc.Team{
+			_, _, _, err = concourse.NewClient(s.ConcourseURL, s.concourseAuthenticatedClient, true).Team(storeName).CreateOrUpdate(atc.Team{
 				Name: storeName,
 				Auth: map[string]*json.RawMessage{
 					uaa.ProviderName: &jrm,
 				},
 			})
-
+			if err != nil {
+				return nil, err
+			}
 		}
-
 	}
 
 	ts, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
@@ -217,6 +220,7 @@ func (s *cfFlyServer) signHandler(w http.ResponseWriter, r *http.Request) {
 
 	token, err := s.mintToken(at, spaceID)
 	if err != nil {
+		log.Println(err)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -234,10 +238,58 @@ func (s *cfFlyServer) CreateHandler() http.Handler {
 type basicAuthTransport struct {
 	Username string
 	Password string
+	TokenURL string
+
+	// Internal
+	lock     sync.RWMutex
+	token    string
+	tokenTTL time.Time
+}
+
+func (t *basicAuthTransport) getToken() (string, error) {
+	t.lock.RLock()
+	valid := time.Now().Before(t.tokenTTL)
+	rv := t.token
+	t.lock.RUnlock()
+
+	if valid {
+		return "", rv
+	}
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	req, err := http.NewRequest(http.MethodGet, t.TokenURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.SetBasicAuth(t.Username, t.Password)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", errors.New("bad status code getting token")
+	}
+
+	var at atc.AuthToken
+	err = json.NewDecoder(resp.Body).Decode(&at)
+	resp.Body.Close()
+	if err != nil {
+		return "", err
+	}
+
+	t.token = at.Value
 }
 
 func (t *basicAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.SetBasicAuth(t.Username, t.Password)
+	tok, err := t.getToken()
+	if err != nil {
+		return nil, err
+	}
+	r.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tok))
 	return http.DefaultTransport.RoundTrip(r)
 }
 
