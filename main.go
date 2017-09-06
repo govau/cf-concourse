@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	cfclient "github.com/cloudfoundry-community/go-cfclient"
@@ -40,21 +39,14 @@ type cfFlyServer struct {
 	// ConcourseURL is the URL for our Concourse instance
 	ConcourseURL string
 
-	// ConcourseSigningKey is the PEM key materials for the key that is used to sign Concourse tokens. This same key should be passed to "atc" at startup using the --session-signing-key /path/to/key option
+	// ConcourseSigningKey is the PEM key material for the key that is used to sign Concourse tokens. This same key should be passed to "atc" and "tsa" at startup using the --session-signing-key /path/to/key option
 	ConcourseSigningKey string
-
-	// ConcourseUsername used to create team in Concourse
-	ConcourseUsername string
-
-	// ConcoursePassword used to create team in Concourse
-	ConcoursePassword string
 
 	// AutoCreateTeams, if set, always check the team exists and if not create before minting token
 	AutoCreateTeams bool
 
 	// Internal
-	uaaClient                    *cfcommon.UAAClient
-	concourseAuthenticatedClient *http.Client
+	uaaClient *cfcommon.UAAClient
 
 	// current key
 	curPrivateKey *rsa.PrivateKey
@@ -71,14 +63,6 @@ func (s *cfFlyServer) Init() error {
 	s.curPrivateKey, err = jwt.ParseRSAPrivateKeyFromPEM([]byte(s.ConcourseSigningKey))
 	if err != nil {
 		return err
-	}
-
-	s.concourseAuthenticatedClient = &http.Client{
-		Transport: &basicAuthTransport{
-			Username: s.ConcourseUsername,
-			Password: s.ConcoursePassword,
-			TokenURL: fmt.Sprintf("%s/api/v1/teams/main/auth/token", s.ConcourseURL),
-		},
 	}
 
 	return nil
@@ -172,7 +156,12 @@ func (s *cfFlyServer) mintToken(accessToken, spaceID string) ([]byte, error) {
 			}
 
 			jrm := json.RawMessage(confBytes)
-			_, _, _, err = concourse.NewClient(s.ConcourseURL, s.concourseAuthenticatedClient, true).Team(storeName).CreateOrUpdate(atc.Team{
+			_, _, _, err = concourse.NewClient(s.ConcourseURL, &http.Client{
+				Transport: &selfAssertingTransport{
+					SigningKey:   s.curPrivateKey,
+					EmailAddress: email,
+				},
+			}, true).Team(storeName).CreateOrUpdate(atc.Team{
 				Name: storeName,
 				Auth: map[string]*json.RawMessage{
 					uaa.ProviderName: &jrm,
@@ -235,57 +224,22 @@ func (s *cfFlyServer) CreateHandler() http.Handler {
 	return r
 }
 
-type basicAuthTransport struct {
-	Username string
-	Password string
-	TokenURL string
-
-	// Internal
-	lock     sync.RWMutex
-	token    string
-	tokenTTL time.Time
+type selfAssertingTransport struct {
+	SigningKey   *rsa.PrivateKey
+	EmailAddress string
 }
 
-func (t *basicAuthTransport) getToken() (string, error) {
-	t.lock.RLock()
-	valid := time.Now().Before(t.tokenTTL)
-	rv := t.token
-	t.lock.RUnlock()
+func (t *selfAssertingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		// Concourse normal claims
+		"exp":      time.Now().Add(time.Hour).Unix(),
+		"teamName": "main",
+		"isAdmin":  true,
+		"csrf":     "",
 
-	if valid {
-		return "", rv
-	}
-
-	t.lock.Lock()
-	defer t.lock.Unlock()
-
-	req, err := http.NewRequest(http.MethodGet, t.TokenURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.SetBasicAuth(t.Username, t.Password)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", errors.New("bad status code getting token")
-	}
-
-	var at atc.AuthToken
-	err = json.NewDecoder(resp.Body).Decode(&at)
-	resp.Body.Close()
-	if err != nil {
-		return "", err
-	}
-
-	t.token = at.Value
-}
-
-func (t *basicAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	tok, err := t.getToken()
+		// Add email address, in the hope Concourse might use this in the future for audit logging
+		"emailAddress": t.EmailAddress,
+	}).SignedString(t.SigningKey)
 	if err != nil {
 		return nil, err
 	}
@@ -302,8 +256,6 @@ func main() {
 		UAAConcourseClientSecret: os.Getenv("CF_UAA_CONCOURSE_CLIENT_SECRET"),
 		ConcourseURL:             os.Getenv("CONCOURSE_URL"),
 		ConcourseSigningKey:      os.Getenv("CONCOURSE_SIGNING_KEY"),
-		ConcourseUsername:        os.Getenv("CONCOURSE_USERNAME"),
-		ConcoursePassword:        os.Getenv("CONCOURSE_PASSWORD"),
 		AutoCreateTeams:          true,
 	}
 	err := server.Init()

@@ -26,7 +26,7 @@ uaac client add cf-concourse-web-integration \
     --name "cf-concourse-web-integration" \
     --scope "openid cloud_controller.read" \
     --authorized_grant_types "authorization_code" \
-    --redirect_uri "https://cf.system.${ENV_DOMAIN}/v1/callback" \
+    --redirect_uri "https://concourse.${ENV_DOMAIN}/auth/uaa/callback" \
     --access_token_validity "3600" \
     --secret $WEB_SECRET
 ```
